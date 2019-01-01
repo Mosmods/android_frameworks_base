@@ -157,6 +157,8 @@ public interface WindowManagerPolicy extends WindowManagerPolicyConstants {
     int FINISH_LAYOUT_REDO_WALLPAPER = 0x0004;
     /** Need to recompute animations */
     int FINISH_LAYOUT_REDO_ANIM = 0x0008;
+    /** Layer for the screen off animation */
+    int COLOR_FADE_LAYER = 0x40000001;
 
     /**
      * Register shortcuts for window manager to dispatch.
@@ -623,6 +625,8 @@ public interface WindowManagerPolicy extends WindowManagerPolicyConstants {
          * @param listener callback to call when display can be turned off
          */
         void screenTurningOff(ScreenOffListener listener);
+
+        void addSystemUIVisibilityFlag(int flags);
 
         /**
          * Convert the lid state to a human readable format.

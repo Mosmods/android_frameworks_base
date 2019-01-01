@@ -4724,10 +4724,13 @@ public final class Settings {
         private static final HashSet<String> MOVED_TO_LOCK_SETTINGS;
         private static final HashSet<String> MOVED_TO_GLOBAL;
         static {
-            MOVED_TO_LOCK_SETTINGS = new HashSet<>(3);
+            MOVED_TO_LOCK_SETTINGS = new HashSet<>(6);
             MOVED_TO_LOCK_SETTINGS.add(Secure.LOCK_PATTERN_ENABLED);
             MOVED_TO_LOCK_SETTINGS.add(Secure.LOCK_PATTERN_VISIBLE);
             MOVED_TO_LOCK_SETTINGS.add(Secure.LOCK_PATTERN_TACTILE_FEEDBACK_ENABLED);
+            MOVED_TO_LOCK_SETTINGS.add(Secure.LOCK_PATTERN_SIZE);
+            MOVED_TO_LOCK_SETTINGS.add(Secure.LOCK_DOTS_VISIBLE);
+            MOVED_TO_LOCK_SETTINGS.add(Secure.LOCK_SHOW_ERROR_PATH);
 
             MOVED_TO_GLOBAL = new HashSet<>();
             MOVED_TO_GLOBAL.add(Settings.Global.ADB_ENABLED);
@@ -5783,6 +5786,24 @@ public final class Settings {
         @Deprecated
         public static final String
                 LOCK_PATTERN_TACTILE_FEEDBACK_ENABLED = "lock_pattern_tactile_feedback_enabled";
+
+        /**
+         * Determines the width and height of the LockPatternView widget
+         * @hide
+         */
+        public static final String LOCK_PATTERN_SIZE = "lock_pattern_size";
+
+        /**
+         * Whether lock pattern will show dots (0 = false, 1 = true)
+         * @hide
+         */
+        public static final String LOCK_DOTS_VISIBLE = "lock_pattern_dotsvisible";
+
+        /**
+         * Whether lockscreen error pattern is visible (0 = false, 1 = true)
+         * @hide
+         */
+        public static final String LOCK_SHOW_ERROR_PATH = "lock_pattern_show_error_path";
 
         /**
          * This preference allows the device to be locked given time after screen goes off,
@@ -7538,9 +7559,6 @@ public final class Settings {
          */
         public static final String ASSIST_GESTURE_SENSITIVITY = "assist_gesture_sensitivity";
 
-        private static final Validator ASSIST_GESTURE_SENSITIVITY_VALIDATOR =
-                new SettingsValidators.InclusiveFloatRangeValidator(0.0f, 1.0f);
-
         /**
          * Whether the assist gesture should silence alerts.
          *
@@ -7569,8 +7587,6 @@ public final class Settings {
          * @hide
          */
         public static final String ASSIST_GESTURE_SETUP_COMPLETE = "assist_gesture_setup_complete";
-
-        private static final Validator ASSIST_GESTURE_SETUP_COMPLETE_VALIDATOR = BOOLEAN_VALIDATOR;
 
         /**
          * Control whether Night display is currently activated.
@@ -8027,8 +8043,6 @@ public final class Settings {
             NFC_PAYMENT_DEFAULT_COMPONENT,
             AUTOMATIC_STORAGE_MANAGER_DAYS_TO_RETAIN,
             ASSIST_GESTURE_ENABLED,
-            ASSIST_GESTURE_SENSITIVITY,
-            ASSIST_GESTURE_SETUP_COMPLETE,
             ASSIST_GESTURE_SILENCE_ALERTS_ENABLED,
             ASSIST_GESTURE_WAKE_ENABLED,
             VR_DISPLAY_MODE,
@@ -8167,8 +8181,6 @@ public final class Settings {
             VALIDATORS.put(AUTOMATIC_STORAGE_MANAGER_DAYS_TO_RETAIN,
                     AUTOMATIC_STORAGE_MANAGER_DAYS_TO_RETAIN_VALIDATOR);
             VALIDATORS.put(ASSIST_GESTURE_ENABLED, ASSIST_GESTURE_ENABLED_VALIDATOR);
-            VALIDATORS.put(ASSIST_GESTURE_SENSITIVITY, ASSIST_GESTURE_SENSITIVITY_VALIDATOR);
-            VALIDATORS.put(ASSIST_GESTURE_SETUP_COMPLETE, ASSIST_GESTURE_SETUP_COMPLETE_VALIDATOR);
             VALIDATORS.put(ASSIST_GESTURE_SILENCE_ALERTS_ENABLED,
                     ASSIST_GESTURE_SILENCE_ALERTS_ENABLED_VALIDATOR);
             VALIDATORS.put(ASSIST_GESTURE_WAKE_ENABLED, ASSIST_GESTURE_WAKE_ENABLED_VALIDATOR);
@@ -10528,6 +10540,15 @@ public final class Settings {
         public static final String ACTIVITY_MANAGER_CONSTANTS = "activity_manager_constants";
 
         /**
+         * Feature flag to enable or disable the activity starts logging feature.
+         * Type: int (0 for false, 1 for true)
+         * Default: 0
+         * @hide
+         */
+        public static final String ACTIVITY_STARTS_LOGGING_ENABLED
+                = "activity_starts_logging_enabled";
+
+        /**
          * App ops specific settings.
          * This is encoded as a key=value list, separated by commas. Ex:
          *
@@ -11596,7 +11617,7 @@ public final class Settings {
         /**
          * Defines global runtime overrides to window policy.
          *
-         * See {@link com.android.server.policy.PolicyControl} for value format.
+         * See {@link android.view.WindowManagerPolicyControl} for value format.
          *
          * @hide
          */
@@ -11618,6 +11639,15 @@ public final class Settings {
          * @hide
          */
         public static final String BLOCKED_SLICES = "blocked_slices";
+
+        /**
+         * Defines global runtime overrides to window policy style.
+         *
+         * See {@link android.view.WindowManagerPolicyControl} for value definitions.
+         *
+         * @hide
+         */
+        public static final String POLICY_CONTROL_STYLE = "policy_control_style";
 
         /**
          * Defines global zen mode.  ZEN_MODE_OFF, ZEN_MODE_IMPORTANT_INTERRUPTIONS,

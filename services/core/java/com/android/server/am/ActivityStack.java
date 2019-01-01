@@ -1654,6 +1654,16 @@ class ActivityStack<T extends StackWindowController> extends ConfigurationContai
     void addToStopping(ActivityRecord r, boolean scheduleIdle, boolean idleDelayed) {
         if (!mStackSupervisor.mStoppingActivities.contains(r)) {
             mStackSupervisor.mStoppingActivities.add(r);
+
+            // Some activity is waiting for another activity to become visible before it's being
+            // stopped, which means that we also want to wait with stopping this one to avoid
+            // flickers.
+            if (!mStackSupervisor.mActivitiesWaitingForVisibleActivity.isEmpty()
+                    && !mStackSupervisor.mActivitiesWaitingForVisibleActivity.contains(r)) {
+                if (DEBUG_SWITCH) Slog.i(TAG_SWITCH, "adding to waiting visible activity=" + r
+                        + " existing=" + mStackSupervisor.mActivitiesWaitingForVisibleActivity);
+                mStackSupervisor.mActivitiesWaitingForVisibleActivity.add(r);
+            }
         }
 
         // If we already have a few activities waiting to stop, then give up
@@ -2401,6 +2411,7 @@ class ActivityStack<T extends StackWindowController> extends ConfigurationContai
         mStackSupervisor.mGoingToSleepActivities.remove(next);
         next.sleeping = false;
         mStackSupervisor.mActivitiesWaitingForVisibleActivity.remove(next);
+        next.launching = true;
 
         if (DEBUG_SWITCH) Slog.v(TAG_SWITCH, "Resuming " + next);
 
@@ -3445,6 +3456,7 @@ class ActivityStack<T extends StackWindowController> extends ConfigurationContai
 
     final void stopActivityLocked(ActivityRecord r) {
         if (DEBUG_SWITCH) Slog.d(TAG_SWITCH, "Stopping: " + r);
+        r.launching = false;
         if ((r.intent.getFlags()&Intent.FLAG_ACTIVITY_NO_HISTORY) != 0
                 || (r.info.flags&ActivityInfo.FLAG_NO_HISTORY) != 0) {
             if (!r.finishing) {

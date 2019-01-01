@@ -312,6 +312,7 @@ final class ActivityRecord extends ConfigurationContainer implements AppWindowCo
     private boolean mDeferHidingClient; // If true we told WM to defer reporting to the client
                                         // process that it is hidden.
     boolean sleeping;       // have we told the activity to sleep?
+    boolean launching;      // is activity launch in progress?
     boolean nowVisible;     // is this activity's window visible?
     boolean mClientVisibilityDeferred;// was the visibility change message to client deferred?
     boolean idle;           // has the activity gone idle?
@@ -694,9 +695,13 @@ final class ActivityRecord extends ConfigurationContainer implements AppWindowCo
         final boolean inPictureInPictureMode = inPinnedWindowingMode() && targetStackBounds != null;
         if (inPictureInPictureMode != mLastReportedPictureInPictureMode || forceUpdate) {
             // Picture-in-picture mode changes also trigger a multi-window mode change as well, so
-            // update that here in order
+            // update that here in order. Set the last reported MW state to the same as the PiP
+            // state since we haven't yet actually resized the task (these callbacks need to
+            // preceed the configuration change from the resiez.
+            // TODO(110009072): Once we move these callbacks to the client, remove all logic related
+            // to forcing the update of the picture-in-picture mode as a part of the PiP animation.
             mLastReportedPictureInPictureMode = inPictureInPictureMode;
-            mLastReportedMultiWindowMode = inMultiWindowMode();
+            mLastReportedMultiWindowMode = inPictureInPictureMode;
             final Configuration newConfig = task.computeNewOverrideConfigurationForBounds(
                     targetStackBounds, null);
             schedulePictureInPictureModeChanged(newConfig);
@@ -2096,6 +2101,7 @@ final class ActivityRecord extends ConfigurationContainer implements AppWindowCo
             if (DEBUG_SWITCH) Log.v(TAG_SWITCH, "windowsVisibleLocked(): " + this);
             if (!nowVisible) {
                 nowVisible = true;
+                launching = false;
                 lastVisibleTime = SystemClock.uptimeMillis();
                 if (idle || mStackSupervisor.isStoppingNoHistoryActivity()) {
                     // If this activity was already idle or there is an activity that must be
@@ -2128,6 +2134,7 @@ final class ActivityRecord extends ConfigurationContainer implements AppWindowCo
         synchronized (service) {
             if (DEBUG_SWITCH) Log.v(TAG_SWITCH, "windowsGone(): " + this);
             nowVisible = false;
+            launching = false;
         }
     }
 

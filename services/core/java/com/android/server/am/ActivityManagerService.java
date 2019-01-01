@@ -1951,6 +1951,16 @@ public class ActivityManagerService extends IActivityManager.Stub
     CompatModeDialog mCompatModeDialog;
     long mLastMemUsageReportTime = 0;
 
+    // Min aging threshold in milliseconds to consider a B-service
+    int mMinBServiceAgingTime =
+            SystemProperties.getInt("ro.vendor.qti.sys.fw.bservice_age", 5000);
+    // Threshold for B-services when in memory pressure
+    int mBServiceAppThreshold =
+            SystemProperties.getInt("ro.vendor.qti.sys.fw.bservice_limit", 5);
+    // Enable B-service aging propagation on memory pressure.
+    boolean mEnableBServicePropagation =
+            SystemProperties.getBoolean("ro.vendor.qti.sys.fw.bservice_enable", false);
+
     /**
      * Flag whether the current user is a "monkey", i.e. whether
      * the UI is driven by a UI automation tool.
@@ -2212,6 +2222,9 @@ public class ActivityManagerService extends IActivityManager.Stub
                     }
                 }
                 callbacks.finishBroadcast();
+                // We have to clean up the RemoteCallbackList here, because otherwise it will
+                // needlessly hold the enclosed callbacks until the remote process dies.
+                callbacks.kill();
             } break;
             case UPDATE_TIME_ZONE: {
                 synchronized (ActivityManagerService.this) {
@@ -5593,7 +5606,7 @@ public class ActivityManagerService extends IActivityManager.Stub
         // TODO: Switch to user app stacks here.
         int ret = mActivityStartController.startActivities(caller, -1, callingPackage,
                 intents, resolvedTypes, resultTo, SafeActivityOptions.fromBundle(bOptions), userId,
-                reason);
+                reason, null /* originatingPendingIntent */);
         return ret;
     }
 
@@ -5891,6 +5904,7 @@ public class ActivityManagerService extends IActivityManager.Stub
     private final void handleAppDiedLocked(ProcessRecord app,
             boolean restarting, boolean allowRestart) {
         int pid = app.pid;
+        final boolean clearLaunchStartTime = !restarting && app.removed && app.foregroundActivities;
         boolean kept = cleanUpApplicationRecordLocked(app, restarting, allowRestart, -1,
                 false /*replacingPid*/);
         if (!kept && !restarting) {
@@ -5930,6 +5944,19 @@ public class ActivityManagerService extends IActivityManager.Stub
             }
         } finally {
             mWindowManager.continueSurfaceLayout();
+        }
+
+        // Hack for pi
+        // When an app process is removed, activities from the process may be relaunched. In the
+        // case of forceStopPackageLocked the activities are finished before any window is drawn,
+        // and the launch time is not cleared. This will be incorrectly used to calculate launch
+        // time for the next launched activity launched in the same windowing mode.
+        if (clearLaunchStartTime) {
+            final LaunchTimeTracker.Entry entry = mStackSupervisor
+                    .getLaunchTimeTracker().getEntry(mStackSupervisor.getWindowingMode());
+            if (entry != null) {
+                entry.mLaunchStartTime = 0;
+            }
         }
     }
 
@@ -11065,6 +11092,20 @@ public class ActivityManagerService extends IActivityManager.Stub
                 Binder.restoreCallingIdentity(ident);
             }
         }
+    }
+
+    /**
+     * @return whitelist tag for a uid from mPendingTempWhitelist, null if not currently on
+     * the whitelist
+     */
+    String getPendingTempWhitelistTagForUidLocked(int uid) {
+        final PendingTempWhitelist ptw = mPendingTempWhitelist.get(uid);
+        return ptw != null ? ptw.tag : null;
+    }
+
+    @VisibleForTesting
+    boolean isActivityStartsLoggingEnabled() {
+        return mConstants.mFlagActivityStartsLoggingEnabled;
     }
 
     @Override
@@ -23368,6 +23409,19 @@ public class ActivityManagerService extends IActivityManager.Stub
             }
         }
 
+        // If the app was recently in the foreground and moved to a foreground service status,
+        // allow it to get a higher rank in memory for some time, compared to other foreground
+        // services so that it can finish performing any persistence/processing of in-memory state.
+        if (app.foregroundServices && adj > ProcessList.PERCEPTIBLE_RECENT_FOREGROUND_APP_ADJ
+                && (app.lastTopTime + mConstants.TOP_TO_FGS_GRACE_DURATION > now
+                    || app.setProcState <= ActivityManager.PROCESS_STATE_TOP)) {
+            adj = ProcessList.PERCEPTIBLE_RECENT_FOREGROUND_APP_ADJ;
+            app.adjType = "fg-service-act";
+            if (DEBUG_OOM_ADJ_REASON || logUid == appUid) {
+                reportOomAdjMessageLocked(TAG_OOM_ADJ, "Raise to recent fg: " + app);
+            }
+        }
+
         if (adj > ProcessList.PERCEPTIBLE_APP_ADJ
                 || procState > ActivityManager.PROCESS_STATE_TRANSIENT_BACKGROUND) {
             if (app.forcingToImportant != null) {
@@ -23632,6 +23686,10 @@ public class ActivityManagerService extends IActivityManager.Stub
                                         schedGroup = ProcessList.SCHED_GROUP_DEFAULT;
                                         procState = ActivityManager.PROCESS_STATE_PERSISTENT;
                                     }
+                                } else if ((cr.flags & Context.BIND_ADJUST_BELOW_PERCEPTIBLE) != 0
+                                        && clientAdj < ProcessList.PERCEPTIBLE_APP_ADJ
+                                        && adj > ProcessList.PERCEPTIBLE_APP_ADJ + 1) {
+                                    newAdj = ProcessList.PERCEPTIBLE_APP_ADJ + 1;
                                 } else if ((cr.flags&Context.BIND_NOT_VISIBLE) != 0
                                         && clientAdj < ProcessList.PERCEPTIBLE_APP_ADJ
                                         && adj > ProcessList.PERCEPTIBLE_APP_ADJ) {
@@ -24602,6 +24660,8 @@ public class ActivityManagerService extends IActivityManager.Stub
             // Must be called before updating setProcState
             maybeUpdateUsageStatsLocked(app, nowElapsed);
 
+            maybeUpdateLastTopTime(app, now);
+
             app.setProcState = app.curProcState;
             if (app.setProcState >= ActivityManager.PROCESS_STATE_HOME) {
                 app.notCachedSinceIdle = false;
@@ -24826,6 +24886,13 @@ public class ActivityManagerService extends IActivityManager.Stub
         }
     }
 
+    private void maybeUpdateLastTopTime(ProcessRecord app, long nowUptime) {
+        if (app.setProcState <= ActivityManager.PROCESS_STATE_TOP
+                && app.curProcState > ActivityManager.PROCESS_STATE_TOP) {
+            app.lastTopTime = nowUptime;
+        }
+    }
+
     private final void setProcessTrackerStateLocked(ProcessRecord proc, int memFactor, long now) {
         if (proc.thread != null) {
             if (proc.baseProcessTracker != null) {
@@ -25007,6 +25074,9 @@ public class ActivityManagerService extends IActivityManager.Stub
         int nextCachedAdj = curCachedAdj+1;
         int curEmptyAdj = ProcessList.CACHED_APP_MIN_ADJ;
         int nextEmptyAdj = curEmptyAdj+2;
+        ProcessRecord selectedAppRecord = null;
+        long serviceLastActivity = 0;
+        int numBServices = 0;
 
         boolean retryCycles = false;
 
@@ -25017,6 +25087,34 @@ public class ActivityManagerService extends IActivityManager.Stub
         }
         for (int i=N-1; i>=0; i--) {
             ProcessRecord app = mLruProcesses.get(i);
+            if (mEnableBServicePropagation && app.serviceb
+                    && (app.curAdj == ProcessList.SERVICE_B_ADJ)) {
+                numBServices++;
+                for (int s = app.services.size() - 1; s >= 0; s--) {
+                    ServiceRecord sr = app.services.valueAt(s);
+                    if (DEBUG_OOM_ADJ) Slog.d(TAG,"app.processName = " + app.processName
+                            + " serviceb = " + app.serviceb + " s = " + s + " sr.lastActivity = "
+                            + sr.lastActivity + " packageName = " + sr.packageName
+                            + " processName = " + sr.processName);
+                    if (SystemClock.uptimeMillis() - sr.lastActivity
+                            < mMinBServiceAgingTime) {
+                        if (DEBUG_OOM_ADJ) {
+                            Slog.d(TAG,"Not aged enough!!!");
+                        }
+                        continue;
+                    }
+                    if (serviceLastActivity == 0) {
+                        serviceLastActivity = sr.lastActivity;
+                        selectedAppRecord = app;
+                    } else if (sr.lastActivity < serviceLastActivity) {
+                        serviceLastActivity = sr.lastActivity;
+                        selectedAppRecord = app;
+                    }
+                }
+            }
+            if (DEBUG_OOM_ADJ && selectedAppRecord != null) Slog.d(TAG,
+                    "Identified app.processName = " + selectedAppRecord.processName
+                    + " app.pid = " + selectedAppRecord.pid);
             if (!app.killedByAm && app.thread != null) {
                 app.procStateChanged = false;
                 computeOomAdjLocked(app, ProcessList.UNKNOWN_ADJ, TOP_APP, true, now);
@@ -25170,6 +25268,14 @@ public class ActivityManagerService extends IActivityManager.Stub
                     numTrimming++;
                 }
             }
+        }
+        if (numBServices > mBServiceAppThreshold && true == mAllowLowerMemLevel
+                && selectedAppRecord != null) {
+            ProcessList.setOomAdj(selectedAppRecord.pid, selectedAppRecord.info.uid,
+                    ProcessList.CACHED_APP_MAX_ADJ);
+            selectedAppRecord.setAdj = selectedAppRecord.curAdj;
+            if (DEBUG_OOM_ADJ) Slog.d(TAG,"app.processName = " + selectedAppRecord.processName
+                        + " app.pid = " + selectedAppRecord.pid + " is moved to higher adj");
         }
 
         incrementProcStateSeqAndNotifyAppsLocked();
@@ -26523,7 +26629,7 @@ public class ActivityManagerService extends IActivityManager.Stub
                         packageUid, packageName,
                         intents, resolvedTypes, null /* resultTo */,
                         SafeActivityOptions.fromBundle(bOptions), userId,
-                        false /* validateIncomingUser */);
+                        false /* validateIncomingUser */, null /* originatingPendingIntent */);
             }
         }
 
@@ -26854,6 +26960,25 @@ public class ActivityManagerService extends IActivityManager.Stub
         @Override
         public void enforceCallerIsRecentsOrHasPermission(String permission, String func) {
             ActivityManagerService.this.enforceCallerIsRecentsOrHasPermission(permission, func);
+        }
+
+        @Override
+        public Intent getHomeIntent() {
+            synchronized (ActivityManagerService.this) {
+                return ActivityManagerService.this.getHomeIntent();
+            }
+        }
+
+        @Override
+        public void notifyDefaultDisplaySizeChanged() {
+            synchronized (ActivityManagerService.this) {
+                if (mSystemServiceManager.isBootCompleted() && mHomeProcess != null) {
+
+                    // TODO: Ugly hack to unblock the release
+                    Slog.i(TAG, "Killing home process because of display size change");
+                    removeProcessLocked(mHomeProcess, false, true, "kill home screen size");
+                }
+            }
         }
     }
 
